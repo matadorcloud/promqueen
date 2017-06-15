@@ -12,7 +12,7 @@ import attr
 
 from twisted.internet import reactor
 from twisted.internet.defer import inlineCallbacks
-# from twisted.internet.task import LoopingCall
+from twisted.internet.task import LoopingCall
 import treq
 
 import urwid
@@ -20,11 +20,15 @@ import urwid
 def lerp(x, y, t):
     return y * t + x * (1 - t)
 
-def pickEdge(l, r):
+def pickEdge(l, c, r):
     "Choose an edge character which looks good."
 
-    if l == r:
+    if l == c == r:
         return '-'
+    elif l > c and r > c:
+        return '^'
+    elif l < c and r < c:
+        return 'v'
     elif l > r:
         return '/'
     elif l < r:
@@ -66,18 +70,21 @@ class PromWidget(urwid.Widget):
 
     def render(self, size, focus=False):
         maxcol, maxrow = size
-        # Fill out the points to full rank. Add a fencepost.
-        fullPoints = self.lerpPoints(maxcol + 1)
+        # Fill out the points to full rank, times two, in order to get better
+        # inter-character edges.. Add a fencepost.
+        fullPoints = self.lerpPoints(maxcol * 2 + 1)
         # Fix them on the right rows.
         absPoints = self.fixPoints(fullPoints, maxrow)
         # Do the draw, per-column.
         cols = []
-        for i, left in enumerate(absPoints[:-1]):
-            right = absPoints[i + 1]
+        for i in range(maxcol):
+            left = absPoints[i * 2]
+            center = absPoints[i * 2 + 1]
+            right = absPoints[i * 2 + 2]
             # Pick the edge, center the "cursor", and "draw" the column.
-            edge = pickEdge(left, right)
-            p = (left + right) // 2
-            s = ' ' * p + edge + '.' * (maxrow - p - 1)
+            edge = pickEdge(left, center, right)
+            p = (left + center + right) // 3
+            s = ' ' * p + edge + ':' * (maxrow - p - 1)
             cols.append(s)
         # Transpose.
         rows = ["".join(rs) for rs in zip(*cols)]
@@ -86,18 +93,16 @@ class PromWidget(urwid.Widget):
 
 @attr.s
 class Prom(object):
-
     loop = attr.ib()
     status = attr.ib()
     frame = attr.ib()
 
     @classmethod
-    def new(cls, loop):
+    def new(cls, loop, widget):
         status = u"No status reported yet!"
-        graph = PromWidget((0, 1, 0))
-        graph = urwid.AttrMap(graph, "graph")
+        center = urwid.AttrMap(widget, "graph")
         header = urwid.Text(u"PromQueen ♛")
-        frame = urwid.Frame(graph, header=header)
+        frame = urwid.Frame(center, header=header)
         self = cls(loop=loop, status=status, frame=frame)
         return self
 
@@ -116,8 +121,12 @@ class Prom(object):
     def draw(self):
         reactor.callLater(0, self.loop.draw_screen)
 
-    @inlineCallbacks
     def start(self, loop, user_data):
+        self.lc = LoopingCall(self.fetch)
+        self.lc.start(15)
+
+    @inlineCallbacks
+    def fetch(self):
         end = int(time.time())
         start = end - 15 * 60
         params = {
@@ -128,11 +137,11 @@ class Prom(object):
         }
         args = urllib.urlencode(params)
         url = "http://localhost:9090/api/v1/query_range?" + args
-        self.changeStatus(u"Sent request")
+        self.changeStatus(u"Fetching fresh data…")
         response = yield treq.get(url)
-        self.changeStatus(u"Got response")
+        self.changeStatus(u"Got response…")
         json = yield response.json()
-        self.changeStatus(u"Response has JSON; drawing graph")
+        self.changeStatus(u"Response has JSON; drawing graph…")
         data = json["data"]["result"][0]
         info = repr(data["metric"]).decode("utf-8")
         self.changePoints(tuple([float(x) for _, x in data["values"]]))
@@ -143,12 +152,12 @@ def main():
         ("graph", "light green", "black"),
     ]
     tloop = urwid.TwistedEventLoop()
-    widget = PromWidget((1,2,3))
+    widget = urwid.SolidFill(' ')
     loop = urwid.MainLoop(widget, palette, event_loop=tloop)
     loop.screen.set_terminal_properties()
     loop.screen.reset_default_terminal_palette()
 
-    prom = Prom.new(loop)
+    prom = Prom.new(loop, widget)
     loop.widget = prom.frame
 
     # Queue the first turn.
