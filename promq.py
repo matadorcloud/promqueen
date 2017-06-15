@@ -5,6 +5,7 @@
 from __future__ import division
 
 import math
+import sys
 import time
 import urllib
 
@@ -96,14 +97,15 @@ class Prom(object):
     loop = attr.ib()
     status = attr.ib()
     frame = attr.ib()
+    query = attr.ib()
 
     @classmethod
-    def new(cls, loop, widget):
+    def new(cls, loop, widget, query):
         status = u"No status reported yet!"
         center = urwid.AttrMap(widget, "graph")
         header = urwid.Text(u"PromQueen ♛")
         frame = urwid.Frame(center, header=header)
-        self = cls(loop=loop, status=status, frame=frame)
+        self = cls(loop=loop, status=status, frame=frame, query=query)
         return self
 
     def changeStatus(self, newStatus):
@@ -133,11 +135,11 @@ class Prom(object):
             "start": start,
             "end": end,
             "step": "1m",
-            "query": "probe_duration_seconds{instance=\"matador.cloud\"}",
+            "query": self.query,
         }
         args = urllib.urlencode(params)
         url = "http://localhost:9090/api/v1/query_range?" + args
-        self.changeStatus(u"Fetching fresh data…")
+        self.changeStatus(u"Fetching query %r…" % self.query)
         response = yield treq.get(url)
         self.changeStatus(u"Got response…")
         json = yield response.json()
@@ -147,7 +149,7 @@ class Prom(object):
         self.changePoints(tuple([float(x) for _, x in data["values"]]))
         self.changeStatus(u"Viewing %s" % info)
 
-def main():
+def main(argv):
     palette = [
         ("graph", "light green", "black"),
     ]
@@ -157,7 +159,8 @@ def main():
     loop.screen.set_terminal_properties()
     loop.screen.reset_default_terminal_palette()
 
-    prom = Prom.new(loop, widget)
+    query = argv[-1]
+    prom = Prom.new(loop, widget, query)
     loop.widget = prom.frame
 
     # Queue the first turn.
@@ -165,4 +168,4 @@ def main():
     loop.run()
 
 if __name__ == "__main__":
-    main()
+    main(sys.argv)
