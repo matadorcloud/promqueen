@@ -55,6 +55,10 @@ class PromWidget(urwid.Widget):
     def fixPoints(self, ps, maxrow):
         bottom = min(ps)
         top = max(ps)
+        if top == bottom:
+            # Add just a little bit of breathing room.
+            top += 1
+            bottom -= 1
         # Our projection will prevent points from occurring in the first or
         # last row, for aethetics. We borrow both rows here, and then put one
         # back when doing the offset fixup.
