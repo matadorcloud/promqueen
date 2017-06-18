@@ -35,6 +35,9 @@ def pickEdge(l, c, r):
     elif l < r:
         return '\\'
 
+def clamp(x, low, high):
+    return min(max(x, low), high)
+
 @attr.s
 class PromWidget(urwid.Widget):
     _sizing = frozenset(["box"])
@@ -59,15 +62,16 @@ class PromWidget(urwid.Widget):
             # Add just a little bit of breathing room.
             top += 1
             bottom -= 1
-        # Our projection will prevent points from occurring in the first or
-        # last row, for aethetics. We borrow both rows here, and then put one
-        # back when doing the offset fixup.
+        # Our projection will generally prevent points from occurring in the
+        # first or last row, for aethetics. We borrow both rows here, and then
+        # put one back when doing the offset fixup.
         scale = (maxrow - 2) / (top - bottom)
         rv = []
         for p in ps:
             p *= scale
+            # "Put it back", but upside-down.
             fixed = maxrow - int(p) - 1
-            rv.append(fixed)
+            rv.append(clamp(fixed, 0, maxrow))
         return rv
 
     def selectable(self):
@@ -76,7 +80,7 @@ class PromWidget(urwid.Widget):
     def render(self, size, focus=False):
         maxcol, maxrow = size
         # Fill out the points to full rank, times two, in order to get better
-        # inter-character edges.. Add a fencepost.
+        # inter-character edges. Add a fencepost.
         fullPoints = self.lerpPoints(maxcol * 2 + 1)
         # Fix them on the right rows.
         absPoints = self.fixPoints(fullPoints, maxrow)
@@ -89,6 +93,7 @@ class PromWidget(urwid.Widget):
             # Pick the edge, center the "cursor", and "draw" the column.
             edge = pickEdge(left, center, right)
             p = (left + center + right) // 3
+            p = min(p, maxrow - 1)
             s = ' ' * p + edge + ':' * (maxrow - p - 1)
             cols.append(s)
         # Transpose.
@@ -109,20 +114,32 @@ class PaneFlipper(urwid.WidgetWrap):
     @classmethod
     def new(cls, listWalker):
         self = cls(listWalker[0])
+        self.listWalker = listWalker
+        self.index = 0
         return self
 
-@attr.s
-class PromQuery(object):
-    query = attr.ib()
-    frame = attr.ib()
+    def next(self):
+        self.index += 1
+        self.index %= len(self.listWalker)
+        self.update()
 
+    def previous(self):
+        self.index -= 1
+        self.index %= len(self.listWalker)
+        self.update()
+
+    def update(self):
+        self._w = self.listWalker[self.index]
+
+class PromQuery(urwid.WidgetWrap):
     @classmethod
     def new(cls, query):
         status = urwid.Text(u"Starting up…")
         widget = urwid.SolidFill(' ')
         header = urwid.Text(u"PromQueen ♛")
         frame = urwid.Frame(widget, header=header, footer=status)
-        self = cls(query=query, frame=frame)
+        self = cls(frame)
+        self.query = query
         return self
 
     def start(self, loop, user_data):
@@ -170,16 +187,29 @@ class PromQuery(object):
             pane = PromPane.new(graph=graph, status=status)
             panes.append(pane)
 
+        yield self.changeStatus(u"Idle", loop)
+
         # Assign the panes.
-        self.frame.contents["body"] = (PaneFlipper.new(urwid.SimpleFocusListWalker(panes)),
-                                       self.frame.options())
+        self._w.contents["body"] = (PaneFlipper.new(urwid.SimpleFocusListWalker(panes)),
+                                    self._w.options())
 
         # And queue a redraw.
         yield loop.redraw()
 
     def changeStatus(self, newStatus, loop):
-        self.frame.contents["footer"] = urwid.Text(newStatus), self.frame.options()
+        self._w.contents["footer"] = urwid.Text(newStatus), self._w.options()
         return loop.redraw()
+
+    _selectable = True
+
+    def keypress(self, size, key):
+        pane = self._w.contents["body"][0]
+        if key == "up":
+            pane.previous()
+        elif key == "down":
+            pane.next()
+        else:
+            return pane.keypress(size, key)
 
 def main(argv):
     query = argv[-1]
@@ -194,7 +224,7 @@ def main(argv):
         ("graph5", "light red", "black"),
     ]
     tloop = urwid.TwistedEventLoop()
-    loop = urwid.MainLoop(prom.frame, palette, event_loop=tloop)
+    loop = urwid.MainLoop(prom, palette, event_loop=tloop)
 
     # Patch a very useful redraw combinator onto the loop.
     loop.redraw = lambda: deferLater(reactor, 0, loop.draw_screen)
