@@ -13,7 +13,7 @@ import attr
 
 from twisted.internet import reactor
 from twisted.internet.defer import inlineCallbacks
-from twisted.internet.task import LoopingCall
+from twisted.internet.task import LoopingCall, deferLater
 import treq
 
 import urwid
@@ -96,43 +96,48 @@ class PromWidget(urwid.Widget):
         canvas = urwid.TextCanvas(rows, maxcol=maxcol)
         return canvas
 
-@attr.s
-class Prom(object):
-    loop = attr.ib()
-    status = attr.ib()
-    frame = attr.ib()
-    query = attr.ib()
-
+class PromPane(urwid.WidgetWrap):
     @classmethod
-    def new(cls, loop, widget, query):
-        status = u"No status reported yet!"
-        center = urwid.AttrMap(widget, "graph")
-        header = urwid.Text(u"PromQueen ♛")
-        frame = urwid.Frame(center, header=header)
-        self = cls(loop=loop, status=status, frame=frame, query=query)
+    def new(cls, graph, status):
+        header = urwid.Text(u"Graph Pane")
+        footer = urwid.Text(status)
+        frame = urwid.Frame(graph, header=header, footer=footer)
+        self = cls(frame)
         return self
 
-    def changeStatus(self, newStatus):
-        self.status = newStatus
-        self.frame.contents["footer"] = (urwid.Text(self.status),
-                                         self.frame.options())
-        self.draw()
+class PaneFlipper(urwid.WidgetWrap):
+    @classmethod
+    def new(cls, listWalker):
+        self = cls(listWalker[0])
+        return self
 
-    def changePoints(self, newPoints):
-        graph = PromWidget(newPoints)
-        graph = urwid.AttrMap(graph, "graph")
-        self.frame.contents["body"] = (graph, self.frame.options())
-        self.draw()
+@attr.s
+class PromQuery(object):
+    query = attr.ib()
+    frame = attr.ib()
 
-    def draw(self):
-        reactor.callLater(0, self.loop.draw_screen)
+    @classmethod
+    def new(cls, query):
+        status = urwid.Text(u"Starting up…")
+        widget = urwid.SolidFill(' ')
+        header = urwid.Text(u"PromQueen ♛")
+        frame = urwid.Frame(widget, header=header, footer=status)
+        self = cls(query=query, frame=frame)
+        return self
 
     def start(self, loop, user_data):
-        self.lc = LoopingCall(self.fetch)
-        self.lc.start(15)
+        self.changeStatus(u"Starting query loop…", loop)
+        self.lc = LoopingCall(self.fetch, loop)
+        d = self.lc.start(15)
+
+        @d.addErrback
+        def loopFailed(failure):
+            return self.changeStatus(u"Loop failed: %s" % failure, loop)
+
+        return d
 
     @inlineCallbacks
-    def fetch(self):
+    def fetch(self, loop):
         end = int(time.time())
         start = end - 15 * 60
         params = {
@@ -143,29 +148,61 @@ class Prom(object):
         }
         args = urllib.urlencode(params)
         url = "http://localhost:9090/api/v1/query_range?" + args
-        self.changeStatus(u"Fetching query %r…" % self.query)
-        response = yield treq.get(url)
-        self.changeStatus(u"Got response…")
-        json = yield response.json()
-        self.changeStatus(u"Response has JSON; drawing graph…")
-        data = json["data"]["result"][0]
-        info = repr(data["metric"]).decode("utf-8")
-        self.changePoints(tuple([float(x) for _, x in data["values"]]))
-        self.changeStatus(u"Viewing %s" % info)
+
+        # Enqueue the request before yielding our status change. This ensures
+        # that the user will see that we're fetching the query, but also that
+        # we start fetching the query before we wait for the screen redraw.
+        request = treq.get(url)
+        yield self.changeStatus(u"Fetching query %r…" % self.query, loop)
+        response = yield request
+
+        # Ditto here.
+        d = response.json()
+        yield self.changeStatus(u"Got response…", loop)
+        json = yield d
+        panes = []
+        for i, data in enumerate(json["data"]["result"]):
+            yield self.changeStatus(u"Drawing graph %d…" % i, loop)
+            info = repr(data["metric"]).decode("utf-8")
+            points = tuple([float(x) for _, x in data["values"]])
+            status = u"Viewing query %s: %s" % (self.query, info)
+            graph = urwid.AttrMap(PromWidget(points), "graph%d" % (i % 6))
+            pane = PromPane.new(graph=graph, status=status)
+            panes.append(pane)
+
+        # Assign the panes.
+        self.frame.contents["body"] = (PaneFlipper.new(urwid.SimpleFocusListWalker(panes)),
+                                       self.frame.options())
+
+        # And queue a redraw.
+        yield loop.redraw()
+
+    def changeStatus(self, newStatus, loop):
+        self.frame.contents["footer"] = urwid.Text(newStatus), self.frame.options()
+        return loop.redraw()
 
 def main(argv):
+    query = argv[-1]
+    prom = PromQuery.new(query)
+
     palette = [
-        ("graph", "light green", "black"),
+        ("graph0", "light blue", "black"),
+        ("graph1", "light cyan", "black"),
+        ("graph2", "light gray", "black"),
+        ("graph3", "light green", "black"),
+        ("graph4", "light magenta", "black"),
+        ("graph5", "light red", "black"),
     ]
     tloop = urwid.TwistedEventLoop()
-    widget = urwid.SolidFill(' ')
-    loop = urwid.MainLoop(widget, palette, event_loop=tloop)
+    loop = urwid.MainLoop(prom.frame, palette, event_loop=tloop)
+
+    # Patch a very useful redraw combinator onto the loop.
+    loop.redraw = lambda: deferLater(reactor, 0, loop.draw_screen)
+
+    # Reset the screen's color palette. This is necessary if we want colors to
+    # work?
     loop.screen.set_terminal_properties()
     loop.screen.reset_default_terminal_palette()
-
-    query = argv[-1]
-    prom = Prom.new(loop, widget, query)
-    loop.widget = prom.frame
 
     # Queue the first turn.
     loop.set_alarm_in(0, prom.start)
