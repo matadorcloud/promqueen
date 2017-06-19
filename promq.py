@@ -2,6 +2,9 @@
 # coding=utf-8
 #! nix-shell -i python -p pythonPackages.attrs pythonPackages.urwid pythonPackages.twisted pythonPackages.treq
 
+# PromQueen: A simple Prometheus query visualizer.
+# © 2017 Corbin Simpson
+
 from __future__ import division
 
 import math
