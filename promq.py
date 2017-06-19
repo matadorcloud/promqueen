@@ -135,6 +135,9 @@ class PaneFlipper(urwid.WidgetWrap):
         self._w = self.listWalker[self.index]
 
 class PromQuery(urwid.WidgetWrap):
+
+    usable = False
+
     @classmethod
     def new(cls, query):
         status = urwid.Text(u"Starting up…")
@@ -180,24 +183,32 @@ class PromQuery(urwid.WidgetWrap):
         d = response.json()
         yield self.changeStatus(u"Got response…", loop)
         json = yield d
-        panes = []
-        for i, data in enumerate(json["data"]["result"]):
-            yield self.changeStatus(u"Drawing graph %d…" % i, loop)
-            info = repr(data["metric"]).decode("utf-8")
-            points = tuple([float(x) for _, x in data["values"]])
-            status = u"Viewing query %s: %s" % (self.query, info)
-            graph = urwid.AttrMap(PromWidget(points), "graph%d" % (i % 6))
-            pane = PromPane.new(graph=graph, status=status)
-            panes.append(pane)
 
-        yield self.changeStatus(u"Idle", loop)
+        if json["status"] == u"error":
+            error = u"Error from Prometheus: %s: %s" % (json["errorType"],
+                                                        json["error"])
+            yield self.changeStatus(error, loop)
+        elif not json["data"]["result"]:
+            yield self.changeStatus(u"Error: Prometheus returned zero rows",
+                                    loop)
+        else:
+            panes = []
+            for i, data in enumerate(json["data"]["result"]):
+                yield self.changeStatus(u"Drawing graph %d…" % i, loop)
+                info = repr(data["metric"]).decode("utf-8")
+                points = tuple([float(x) for _, x in data["values"]])
+                status = u"Viewing query %s: %s" % (self.query, info)
+                graph = urwid.AttrMap(PromWidget(points), "graph%d" % (i % 6))
+                pane = PromPane.new(graph=graph, status=status)
+                panes.append(pane)
 
-        # Assign the panes.
-        self._w.contents["body"] = (PaneFlipper.new(urwid.SimpleFocusListWalker(panes)),
-                                    self._w.options())
+            # Assign the panes.
+            self._w.contents["body"] = (PaneFlipper.new(urwid.SimpleFocusListWalker(panes)),
+                                        self._w.options())
+            self.usable = True
 
-        # And queue a redraw.
-        yield loop.redraw()
+            # This includes a redraw.
+            yield self.changeStatus(u"Idle", loop)
 
     def changeStatus(self, newStatus, loop):
         self._w.contents["footer"] = urwid.Text(newStatus), self._w.options()
@@ -206,13 +217,19 @@ class PromQuery(urwid.WidgetWrap):
     _selectable = True
 
     def keypress(self, size, key):
+        # If we're not usable, don't respond.
+        if not self.usable:
+            return None
+
         pane = self._w.contents["body"][0]
         if key == "up":
             pane.previous()
         elif key == "down":
             pane.next()
-        else:
+        elif pane.selectable():
             return pane.keypress(size, key)
+        else:
+            return None
 
 def main(argv):
     query = argv[-1]
