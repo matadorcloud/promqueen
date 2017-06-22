@@ -24,19 +24,14 @@ import urwid
 def lerp(x, y, t):
     return y * t + x * (1 - t)
 
-def pickEdge(l, c, r):
+def pickEdge(f):
     "Choose an edge character which looks good."
 
-    if l == c == r:
-        return '-'
-    elif l > c and r > c:
-        return '^'
-    elif l < c and r < c:
-        return 'v'
-    elif l > r:
-        return '/'
-    elif l < r:
-        return '\\'
+    offset = 8 - int(math.modf(f)[0] * 8)
+    if offset:
+        return unichr(0x2580 + offset)
+    else:
+        return u' '
 
 def clamp(x, low, high):
     return min(max(x, low), high)
@@ -71,10 +66,10 @@ class PromWidget(urwid.Widget):
         scale = (maxrow - 2) / (top - bottom)
         rv = []
         for p in ps:
+            p -= bottom
             p *= scale
-            # "Put it back", but upside-down.
-            fixed = maxrow - int(p) - 1
-            rv.append(clamp(fixed, 0, maxrow))
+            fixed = maxrow - 1 - p
+            rv.append(clamp(fixed, 0, maxrow - 1))
         return rv
 
     def selectable(self):
@@ -82,25 +77,20 @@ class PromWidget(urwid.Widget):
 
     def render(self, size, focus=False):
         maxcol, maxrow = size
-        # Fill out the points to full rank, times two, in order to get better
-        # inter-character edges. Add a fencepost.
-        fullPoints = self.lerpPoints(maxcol * 2 + 1)
+        # Fill out the points to full rank.
+        fullPoints = self.lerpPoints(maxcol)
         # Fix them on the right rows.
         absPoints = self.fixPoints(fullPoints, maxrow)
         # Do the draw, per-column.
         cols = []
-        for i in range(maxcol):
-            left = absPoints[i * 2]
-            center = absPoints[i * 2 + 1]
-            right = absPoints[i * 2 + 2]
+        for point in absPoints:
             # Pick the edge, center the "cursor", and "draw" the column.
-            edge = pickEdge(left, center, right)
-            p = (left + center + right) // 3
-            p = min(p, maxrow - 1)
-            s = ' ' * p + edge + ':' * (maxrow - p - 1)
+            edge = pickEdge(point)
+            p = min(int(point), maxrow - 1)
+            s = u' ' * p + edge + u'█' * (maxrow - p - 1)
             cols.append(s)
         # Transpose.
-        rows = ["".join(rs) for rs in zip(*cols)]
+        rows = [u"".join(rs).encode("utf-8") for rs in zip(*cols)]
         canvas = urwid.TextCanvas(rows, maxcol=maxcol)
         return canvas
 
