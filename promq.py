@@ -188,7 +188,7 @@ class PromQuery(urwid.WidgetWrap):
                 info = repr(data["metric"]).decode("utf-8")
                 points = tuple([float(x) for _, x in data["values"]])
                 status = u"Viewing query %s: %s" % (self.query, info)
-                graph = urwid.AttrMap(PromWidget(points), "graph%d" % (i % 6))
+                graph = urwid.AttrMap(PromWidget(points), "graph%d" % (i % 8))
                 pane = PromPane.new(graph=graph, status=status)
                 panes.append(pane)
 
@@ -232,17 +232,14 @@ def main(argv):
         ("graph3", "light green", "black"),
         ("graph4", "light magenta", "black"),
         ("graph5", "light red", "black"),
+        ("graph6", "yellow", "black"),
+        ("graph7", "white", "black"),
     ]
     tloop = urwid.TwistedEventLoop()
     loop = urwid.MainLoop(prom, palette, event_loop=tloop)
 
     # Patch a very useful redraw combinator onto the loop.
     loop.redraw = lambda: deferLater(reactor, 0, loop.draw_screen)
-
-    # Reset the screen's color palette. This is necessary if we want colors to
-    # work?
-    loop.screen.set_terminal_properties()
-    loop.screen.reset_default_terminal_palette()
 
     # Queue the first turn.
     loop.set_alarm_in(0, prom.start)
