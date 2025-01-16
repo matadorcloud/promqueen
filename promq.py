@@ -1,6 +1,5 @@
-#!/usr/bin/env nix-shell
+#!/usr/bin/env python3
 # coding=utf-8
-#! nix-shell -i python -p pythonPackages.attrs pythonPackages.urwid pythonPackages.twisted pythonPackages.treq
 
 # PromQueen: A simple Prometheus query visualizer.
 # © 2017 Corbin Simpson
@@ -10,9 +9,7 @@ from __future__ import division
 import math
 import sys
 import time
-import urllib
-
-import attr
+from urllib.parse import urlencode
 
 from twisted.internet import reactor
 from twisted.internet.defer import inlineCallbacks
@@ -28,19 +25,16 @@ def pickEdge(f):
     "Choose an edge character which looks good."
 
     offset = 8 - int(math.modf(f)[0] * 8)
-    if offset:
-        return unichr(0x2580 + offset)
-    else:
-        return u' '
+    return chr(0x2580 + offset) if offset else ' '
 
 def clamp(x, low, high):
     return min(max(x, low), high)
 
-@attr.s
 class PromWidget(urwid.Widget):
     _sizing = frozenset(["box"])
 
-    points = attr.ib()
+    def __init__(self, points): self.points = points
+    def __hash__(self): return hash(self.points)
 
     def lerpPoints(self, maxcol):
         ps = self.points
@@ -125,7 +119,6 @@ class PaneFlipper(urwid.WidgetWrap):
         self._w = self.listWalker[self.index]
 
 class PromQuery(urwid.WidgetWrap):
-
     usable = False
 
     @classmethod
@@ -159,7 +152,7 @@ class PromQuery(urwid.WidgetWrap):
             "step": "1m",
             "query": self.query,
         }
-        args = urllib.urlencode(params)
+        args = urlencode(params)
         url = "http://localhost:9090/api/v1/query_range?" + args
 
         # Enqueue the request before yielding our status change. This ensures
@@ -185,7 +178,7 @@ class PromQuery(urwid.WidgetWrap):
             panes = []
             for i, data in enumerate(json["data"]["result"]):
                 yield self.changeStatus(u"Drawing graph %d…" % i, loop)
-                info = repr(data["metric"]).decode("utf-8")
+                info = repr(data["metric"])
                 points = tuple([float(x) for _, x in data["values"]])
                 status = u"Viewing query %s: %s" % (self.query, info)
                 graph = urwid.AttrMap(PromWidget(points), "graph%d" % (i % 8))
@@ -221,20 +214,18 @@ class PromQuery(urwid.WidgetWrap):
         else:
             return None
 
+PALETTE = ("light blue", "light cyan", "light gray", "light green",
+           "light magenta", "light red", "yellow", "white")
+
 def main(argv):
-    query = argv[-1]
+    if len(argv) < 2:
+        print("Usage:", argv[0], "<query>")
+        return 1
+
+    query = argv[1]
     prom = PromQuery.new(query)
 
-    palette = [
-        ("graph0", "light blue", "black"),
-        ("graph1", "light cyan", "black"),
-        ("graph2", "light gray", "black"),
-        ("graph3", "light green", "black"),
-        ("graph4", "light magenta", "black"),
-        ("graph5", "light red", "black"),
-        ("graph6", "yellow", "black"),
-        ("graph7", "white", "black"),
-    ]
+    palette = [("graph%d" % i, c, "black") for i, c in enumerate(PALETTE)]
     tloop = urwid.TwistedEventLoop()
     loop = urwid.MainLoop(prom, palette, event_loop=tloop)
 
@@ -244,6 +235,6 @@ def main(argv):
     # Queue the first turn.
     loop.set_alarm_in(0, prom.start)
     loop.run()
+    return 0
 
-if __name__ == "__main__":
-    main(sys.argv)
+if __name__ == "__main__": sys.exit(main(sys.argv))
