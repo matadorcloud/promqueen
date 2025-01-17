@@ -98,25 +98,27 @@ class PromPane(urwid.WidgetWrap):
         return self
 
 class PaneFlipper(urwid.WidgetWrap):
+    _i = 0
+
     @classmethod
     def new(cls, listWalker):
         self = cls(listWalker[0])
         self.listWalker = listWalker
-        self.index = 0
         return self
 
-    def next(self):
-        self.index += 1
-        self.index %= len(self.listWalker)
+    @property
+    def index(self): return self._i
+
+    @index.setter
+    def index(self, i):
+        self._i = i % len(self.listWalker)
         self.update()
 
-    def previous(self):
-        self.index -= 1
-        self.index %= len(self.listWalker)
-        self.update()
+    def update(self): self._w = self.listWalker[self.index]
 
-    def update(self):
-        self._w = self.listWalker[self.index]
+    def next(self): self.index += 1
+
+    def previous(self): self.index -= 1
 
 class PromQuery(urwid.WidgetWrap):
     usable = False
@@ -186,8 +188,9 @@ class PromQuery(urwid.WidgetWrap):
                 panes.append(pane)
 
             # Assign the panes.
-            self._w.contents["body"] = (PaneFlipper.new(urwid.SimpleFocusListWalker(panes)),
-                                        self._w.options())
+            flipper = PaneFlipper.new(urwid.SimpleFocusListWalker(panes))
+            flipper.index = getattr(self._w.contents["body"][0], "index", 0)
+            self._w.contents["body"] = flipper, self._w.options()
             self.usable = True
 
             # This includes a redraw.
